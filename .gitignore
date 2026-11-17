@@ -1,0 +1,8 @@
+build/
+*.bin
+*.elf
+*.o
+a.out
+test/t
+.vscode/
+.DS_Store
