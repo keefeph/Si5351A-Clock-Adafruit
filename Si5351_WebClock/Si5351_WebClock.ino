@@ -3,12 +3,19 @@
   Board : NodeMCU V3 / NodeMCU 1.0 (ESP-12E, ESP8266)
   Chip  : Si5351A breakout (I2C address 0x60, 25 MHz crystal)
 
-  Wiring (NodeMCU -> Si5351A board)
-    3V3 -> VIN (or 3V3)      GND -> GND
-    D2 (GPIO4) -> SDA        D1 (GPIO5) -> SCL
+  Front panel (optional): 128x64 I2C OLED (SSD1306 0.96" or SH1106 1.3") + KY-040 rotary encoder
+
+  Wiring (NodeMCU)
+    3V3 -> VCC/VIN of Si5351A, OLED and encoder "+"      GND -> GND of all three
+    D2 (GPIO4)  -> SDA  (Si5351A and OLED, shared bus)
+    D1 (GPIO5)  -> SCL  (Si5351A and OLED, shared bus)
+    D5 (GPIO14) -> encoder CLK      D6 (GPIO12) -> encoder DT      D7 (GPIO13) -> encoder SW
 
   Arduino IDE: install "esp8266" board package, select "NodeMCU 1.0 (ESP-12E Module)".
-  No extra libraries needed.
+  Library: "U8g2" by oliver (Library Manager).
+
+  Encoder: main screen  turn = select clock, press = edit, hold = output on/off
+           edit screen  turn = tune, press = change step (1 Hz..100 MHz), hold = back
 
   Web UI : http://si5351.local  (or the IP printed on Serial at 115200)
   API    : GET  /api/state
@@ -35,6 +42,12 @@ const char* AP_PASS   = "si5351clk";     // min 8 characters
 const char* HOSTNAME  = "si5351";        // -> http://si5351.local
 const int   PIN_SDA   = 4;               // D2
 const int   PIN_SCL   = 5;               // D1
+const int   PIN_ENC_A = 14;              // D5  encoder CLK
+const int   PIN_ENC_B = 12;              // D6  encoder DT
+const int   PIN_ENC_SW = 13;             // D7  encoder push switch
+const int   ENC_STEPS_PER_DETENT = 4;    // counts per click: 4 for most KY-040; 2 if it takes two clicks per step
+const bool  ENC_REVERSE = false;         // true if turning clockwise tunes down
+#define     OLED_SH1106 0                // 0 = SSD1306 (0.96"), 1 = SH1106 (1.3")
 // ---------------------------------------------------------------------
 
 using namespace si5351plan;
@@ -53,7 +66,12 @@ Plan      plan;
 bool      planOk = false;
 Si5351Hw  si;
 ESP8266WebServer server(80);
-String    netInfo;
+String    netInfo;                   // shown on the web page
+String    netIp;                     // shown on the OLED
+uint32_t  cfgRev = 0;                // bumps on every change (keeps OLED in sync)
+bool      savePending = false;
+uint32_t  saveDueAt = 0;
+const char HW_FAIL[] = "Settings saved, but the Si5351 did not respond on I2C. Check wiring/power.";
 
 void defaults(Settings& s) {
   s.magic = MAGIC;
@@ -90,6 +108,20 @@ bool applyHardware(const Settings& s, const Plan& p, bool loadChanged) {
   }
   uint8_t drv[3] = {s.clk[0].drive, s.clk[1].drive, s.clk[2].drive};
   return si.apply(p, drv);
+}
+
+// Plan + apply + remember. Returns nullptr, a planner error, or HW_FAIL.
+// persistNow=false delays the flash write 3 s (encoder tuning would wear the flash).
+const char* commitSettings(const Settings& s, bool persistNow) {
+  Plan p;
+  const char* err = buildPlan(s, p);
+  if (err) return err;
+  bool loadChanged = s.load != cfg.load;
+  cfg = s; plan = p; planOk = true; cfgRev++;
+  if (persistNow) { saveSettings(); savePending = false; }
+  else { savePending = true; saveDueAt = millis() + 3000; }
+  if (!applyHardware(cfg, plan, loadChanged)) return HW_FAIL;
+  return nullptr;
 }
 
 // ----------------------------- JSON -----------------------------------
@@ -182,17 +214,13 @@ void handleSet() {
     s.load = (uint8_t)pf;
   }
 
-  Plan p;
-  const char* err = buildPlan(s, p);
+  const char* err = commitSettings(s, true);
+  if (err == HW_FAIL) return sendError(500, err);
   if (err) return sendError(400, err);
-
-  bool loadChanged = s.load != cfg.load;
-  cfg = s; plan = p; planOk = true;
-  saveSettings();
-  if (!applyHardware(cfg, plan, loadChanged))
-    return sendError(500, "Settings saved, but the Si5351 did not respond on I2C. Check wiring/power.");
   server.send(200, "application/json", stateJson());
 }
+
+#include "ui.h"    // front panel; uses the globals and functions above
 
 // ----------------------------- setup ----------------------------------
 void startWifi() {
@@ -202,11 +230,13 @@ void startWifi() {
     WiFi.hostname(HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     Serial.printf("Connecting to %s", WIFI_SSID);
+    ui::splash("Connecting to Wi-Fi", WIFI_SSID);
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) { delay(250); Serial.print('.'); }
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
       netInfo = String(WIFI_SSID) + " · " + WiFi.localIP().toString();
+      netIp = WiFi.localIP().toString();
       Serial.printf("Connected, IP %s\n", WiFi.localIP().toString().c_str());
       return;
     }
@@ -215,6 +245,7 @@ void startWifi() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
   netInfo = String("AP ") + AP_SSID + " · " + WiFi.softAPIP().toString();
+  netIp = String("AP ") + WiFi.softAPIP().toString();
   Serial.printf("Access point \"%s\" (pass \"%s\"), IP %s\n", AP_SSID, AP_PASS,
                 WiFi.softAPIP().toString().c_str());
 }
@@ -238,6 +269,9 @@ void setup() {
   if (planOk && applyHardware(cfg, plan, true)) Serial.println(F("Si5351 configured"));
   else Serial.println(F("Si5351 not found on I2C (0x60) - check wiring"));
 
+  ui::begin();
+  Serial.println(ui::haveOled ? F("OLED found") : F("No OLED found (0x3C/0x3D)"));
+
   startWifi();
   if (MDNS.begin(HOSTNAME)) MDNS.addService("http", "tcp", 80);
 
@@ -255,4 +289,6 @@ void setup() {
 void loop() {
   server.handleClient();
   MDNS.update();
+  ui::poll();
+  if (savePending && (int32_t)(millis() - saveDueAt) >= 0) { saveSettings(); savePending = false; }
 }
