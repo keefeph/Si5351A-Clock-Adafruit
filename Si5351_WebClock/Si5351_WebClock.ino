@@ -47,7 +47,7 @@ const int   PIN_ENC_B = 12;              // D6  encoder DT
 const int   PIN_ENC_SW = 13;             // D7  encoder push switch
 const int   ENC_STEPS_PER_DETENT = 4;    // counts per click: 4 for most KY-040; 2 if it takes two clicks per step
 const bool  ENC_REVERSE = false;         // true if turning clockwise tunes down
-#define     OLED_SH1106 0                // 0 = SSD1306 (0.96"), 1 = SH1106 (1.3")
+#define     OLED_SH1106 1                // 1 = SH1106 (1.3"), 0 = SSD1306 (0.96"); text shifted ~2 px left = wrong setting
 // ---------------------------------------------------------------------
 
 using namespace si5351plan;

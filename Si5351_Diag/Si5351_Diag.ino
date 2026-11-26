@@ -16,7 +16,12 @@ ADC_MODE(ADC_VCC);   // lets ESP.getVcc() read the 3.3 V supply (A0 is unused he
 const int SDA_PIN = 4, SCL_PIN = 5;            // D2, D1
 const int ENC_A = 14, ENC_B = 12, ENC_SW = 13; // D5, D6, D7
 
+#define OLED_SH1106 1   // 1 = SH1106 (1.3"), 0 = SSD1306 (0.96"); text shifted ~2 px left = wrong setting
+#if OLED_SH1106
+U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE, SCL_PIN, SDA_PIN);
+#else
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE, SCL_PIN, SDA_PIN);
+#endif
 ESP8266WebServer server(80);
 String report;
 bool haveOled = false;
@@ -67,10 +72,9 @@ void setup() {
     oled.setFont(u8g2_font_6x10_tf);
     oled.drawStr(0, 10, "Display test OK");
     oled.drawStr(0, 24, si ? "Si5351A found" : "Si5351A MISSING");
-    oled.drawStr(0, 38, "Turn the encoder...");
     oled.sendBuffer();
     haveOled = true;
-    out("  OLED shows a test message now. If it is garbled, set OLED_SH1106 to 1 in the main sketch.");
+    out("  OLED shows a test message now. If text is shifted ~2 px or garbled, flip OLED_SH1106.");
   }
 
   pinMode(ENC_A, INPUT_PULLUP); pinMode(ENC_B, INPUT_PULLUP); pinMode(ENC_SW, INPUT_PULLUP);
@@ -96,14 +100,22 @@ void loop() {
     if (la >= 0) { steps++; Serial.printf("encoder CLK=%d DT=%d  (changes: %ld)\n", a, b, steps); }
     la = a; lb = b;
   }
+  static long shown = -1;
+  static int shownS = -1;
   if (s != ls) {
     if (ls >= 0) Serial.println(s ? "button released" : "button PRESSED");
     ls = s;
-    if (haveOled) {
-      oled.setDrawColor(0); oled.drawBox(0, 44, 128, 20); oled.setDrawColor(1);
-      oled.drawStr(0, 58, s ? "button: up" : "button: PRESSED");
-      oled.sendBuffer();
-    }
+  }
+  if (haveOled && (steps != shown || s != shownS)) {   // live encoder panel on lines 3-5
+    shown = steps; shownS = s;
+    char t[32];
+    oled.setDrawColor(0); oled.drawBox(0, 28, 128, 36); oled.setDrawColor(1);
+    snprintf(t, sizeof t, "CLK(D5)=%d  DT(D6)=%d", a, b);
+    oled.drawStr(0, 38, t);
+    snprintf(t, sizeof t, "changes: %ld", steps);
+    oled.drawStr(0, 50, t);
+    oled.drawStr(0, 62, s ? "button: up" : "button: PRESSED");
+    oled.sendBuffer();
   }
   if (millis() - beat > 5000) {
     beat = millis();

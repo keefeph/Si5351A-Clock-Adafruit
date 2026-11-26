@@ -33,7 +33,7 @@ Power the NodeMCU through its **USB socket**, or with regulated **5 V on VIN**. 
 2. In **Library Manager**, install **U8g2** (by oliver).
 3. Open `Si5351_WebClock/Si5351_WebClock.ino` and select **NodeMCU 1.0 (ESP-12E Module)**.
 4. Optional: set `WIFI_SSID` and `WIFI_PASS` at the top of the sketch. If you leave them empty, or the connection fails, the board starts its own access point: **Si5351-Clock**, password `si5351clk`, at http://192.168.4.1.
-5. If your display is a 1.3" SH1106 (common on larger modules), change `#define OLED_SH1106 0` to `1`.
+5. The sketch is set for a 1.3" SH1106 display (`#define OLED_SH1106 1`). For a 0.96" SSD1306, change it to `0`. If the text is shifted about 2 px left with stray dots on the right edge, it is set for the wrong type.
 6. Upload, then open Serial Monitor at 115200 baud to see the IP address. On your own network you can also use **http://si5351.local**.
 
 U8g2 is the only external library. The Si5351 driver is included.
